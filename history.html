@@ -19,7 +19,7 @@
     }
     
     .container {
-      max-width: 1000px;
+      max-width: 1100px;
       margin: 0 auto;
       padding: 30px 20px;
     }
@@ -28,7 +28,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 30px;
+      margin-bottom: 24px;
     }
     
     .page-title {
@@ -69,7 +69,7 @@
     .filter-bar {
       display: flex;
       gap: 12px;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       flex-wrap: wrap;
       align-items: center;
     }
@@ -150,7 +150,7 @@
       display: grid;
       grid-template-columns: repeat(4, 1fr);
       gap: 16px;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
     }
     
     .stat-card {
@@ -185,6 +185,114 @@
       color: #111827;
     }
     
+    .trend-section {
+      background: white;
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+    
+    .trend-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    
+    .trend-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #111827;
+    }
+    
+    .trend-tabs {
+      display: flex;
+      gap: 4px;
+      background: #f3f4f6;
+      padding: 4px;
+      border-radius: 8px;
+    }
+    
+    .trend-tab {
+      padding: 6px 16px;
+      border: none;
+      background: transparent;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #6b7280;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-weight: 500;
+    }
+    
+    .trend-tab:hover {
+      color: #374151;
+    }
+    
+    .trend-tab.active {
+      background: white;
+      color: #667eea;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+    
+    .trend-chart {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    
+    .trend-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .trend-label {
+      width: 100px;
+      font-size: 12px;
+      color: #6b7280;
+      flex-shrink: 0;
+    }
+    
+    .trend-bar-wrap {
+      flex: 1;
+      height: 28px;
+      background: #f3f4f6;
+      border-radius: 14px;
+      overflow: hidden;
+      position: relative;
+    }
+    
+    .trend-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea, #764ba2);
+      border-radius: 14px;
+      transition: width 0.5s ease;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding-right: 10px;
+    }
+    
+    .trend-bar-value {
+      font-size: 11px;
+      font-weight: 600;
+      color: white;
+    }
+    
+    .trend-stats {
+      width: 80px;
+      text-align: right;
+      font-size: 11px;
+      color: #6b7280;
+    }
+    
+    .trend-stats .trend-count {
+      font-weight: 500;
+      color: #374151;
+    }
+    
     .history-list {
       display: flex;
       flex-direction: column;
@@ -213,7 +321,8 @@
     .history-meta {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
+      flex-wrap: wrap;
     }
     
     .history-time {
@@ -224,7 +333,7 @@
     .tag {
       padding: 3px 10px;
       border-radius: 12px;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 500;
     }
     
@@ -256,6 +365,11 @@
     .tag-adopted {
       background: #d1fae5;
       color: #059669;
+    }
+    
+    .tag-pending {
+      background: #fef3c7;
+      color: #92400e;
     }
     
     .history-content {
@@ -398,7 +512,7 @@
         <div class="stat-value" id="statAdopted">0</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">未采纳</div>
+        <div class="stat-label">待确认</div>
         <div class="stat-value" id="statRejected">0</div>
       </div>
       <div class="stat-card highlight">
@@ -407,12 +521,35 @@
       </div>
     </div>
     
+    <div class="trend-section">
+      <div class="trend-header">
+        <h2>采纳率趋势分析</h2>
+        <div class="trend-tabs" id="trendTabs">
+          <button class="trend-tab active" data-trend="shop">按店铺</button>
+          <button class="trend-tab" data-trend="scenario">按场景</button>
+          <button class="trend-tab" data-trend="tone">按语气</button>
+        </div>
+      </div>
+      <div class="trend-chart" id="trendChart"></div>
+    </div>
+    
     <div class="filter-bar">
       <input type="text" class="search-input" id="searchInput" placeholder="搜索回复内容...">
+      <select class="filter-select" id="shopFilter">
+        <option value="all">全部店铺</option>
+      </select>
       <select class="filter-select" id="scenarioFilter">
         <option value="all">全部场景</option>
         <option value="pre_sales">售前</option>
         <option value="after_sales">售后</option>
+      </select>
+      <select class="filter-select" id="toneFilter">
+        <option value="all">全部语气</option>
+        <option value="professional">专业</option>
+        <option value="friendly">亲切</option>
+        <option value="humorous">幽默</option>
+        <option value="concise">简洁</option>
+        <option value="enthusiastic">热情</option>
       </select>
       <select class="filter-select" id="adoptFilter">
         <option value="all">全部状态</option>

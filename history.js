@@ -6,27 +6,35 @@ const state = {
   searchQuery: '',
   scenarioFilter: 'all',
   adoptFilter: 'all',
-  adoptedIds: []
+  shopFilter: 'all',
+  toneFilter: 'all',
+  adoptedIds: [],
+  shops: [],
+  currentTrendType: 'shop'
 };
+
+const TONE_LABELS = { professional: '专业', friendly: '亲切', humorous: '幽默', concise: '简洁', enthusiastic: '热情' };
+const SCENARIO_LABELS = { pre_sales: '售前', after_sales: '售后', unknown: '其他' };
 
 document.addEventListener('DOMContentLoaded', () => {
   loadData();
   bindEvents();
+  bindTrendTabEvents();
 });
 
 function loadData() {
   Promise.all([
-    new Promise(resolve => {
-      chrome.runtime.sendMessage({ action: 'getHistory' }, res => resolve(res));
-    }),
-    new Promise(resolve => {
-      chrome.storage.local.get(['adoptedReplies'], res => resolve(res));
-    })
-  ]).then(([historyRes, adoptedRes]) => {
+    new Promise(resolve => chrome.runtime.sendMessage({ action: 'getHistory' }, res => resolve(res))),
+    new Promise(resolve => chrome.storage.local.get(['adoptedReplies'], res => resolve(res.adoptedReplies || []))),
+    new Promise(resolve => chrome.runtime.sendMessage({ action: 'getSettings' }, res => resolve(res)))
+  ]).then(([historyRes, adoptedIds, settingsRes]) => {
     if (historyRes.success) {
       state.history = historyRes.data;
     }
-    state.adoptedIds = adoptedRes.adoptedReplies || [];
+    state.adoptedIds = adoptedIds || [];
+    if (settingsRes && settingsRes.success) {
+      state.shops = settingsRes.data?.shops || [];
+    }
 
     state.history.forEach(h => {
       if (h.replyId && state.adoptedIds.includes(h.replyId)) {
@@ -35,11 +43,20 @@ function loadData() {
       }
     });
 
+    populateShopFilter();
     applyFilters();
     renderStats();
+    renderTrendChart();
     renderHistoryList();
     renderPagination();
   });
+}
+
+function populateShopFilter() {
+  const select = document.getElementById('shopFilter');
+  if (!select) return;
+  select.innerHTML = '<option value="all">全部店铺</option>' + 
+    state.shops.map(shop => `<option value="${shop.id}">${shop.name}</option>`).join('');
 }
 
 function bindEvents() {
@@ -67,6 +84,28 @@ function bindEvents() {
     renderPagination();
   });
 
+  const shopFilter = document.getElementById('shopFilter');
+  if (shopFilter) {
+    shopFilter.addEventListener('change', (e) => {
+      state.shopFilter = e.target.value;
+      state.currentPage = 1;
+      applyFilters();
+      renderHistoryList();
+      renderPagination();
+    });
+  }
+
+  const toneFilter = document.getElementById('toneFilter');
+  if (toneFilter) {
+    toneFilter.addEventListener('change', (e) => {
+      state.toneFilter = e.target.value;
+      state.currentPage = 1;
+      applyFilters();
+      renderHistoryList();
+      renderPagination();
+    });
+  }
+
   document.getElementById('clearHistory').addEventListener('click', () => {
     if (confirm('确定要清空所有历史记录吗？此操作不可恢复。')) {
       chrome.runtime.sendMessage({ action: 'clearHistory' }, () => {
@@ -74,10 +113,23 @@ function bindEvents() {
         state.filtered = [];
         state.adoptedIds = [];
         renderStats();
+        renderTrendChart();
         renderHistoryList();
         renderPagination();
       });
     }
+  });
+}
+
+function bindTrendTabEvents() {
+  document.querySelectorAll('.trend-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.currentTrendType = btn.dataset.trend;
+      document.querySelectorAll('.trend-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.trend === state.currentTrendType);
+      });
+      renderTrendChart();
+    });
   });
 }
 
@@ -88,6 +140,14 @@ function applyFilters() {
     }
 
     if (state.scenarioFilter !== 'all' && item.scenario !== state.scenarioFilter) {
+      return false;
+    }
+
+    if (state.shopFilter !== 'all' && item.shopId !== state.shopFilter) {
+      return false;
+    }
+
+    if (state.toneFilter !== 'all' && item.tone !== state.toneFilter) {
       return false;
     }
 
@@ -121,6 +181,80 @@ function renderStats() {
   });
 }
 
+function renderTrendChart() {
+  const chartEl = document.getElementById('trendChart');
+  if (!chartEl) return;
+
+  const validRecords = state.history.filter(h => h.replyId);
+  
+  let groups = {};
+  const type = state.currentTrendType;
+  
+  if (type === 'shop') {
+    state.shops.forEach(shop => {
+      groups[shop.id] = { label: shop.name, total: 0, adopted: 0 };
+    });
+    validRecords.forEach(r => {
+      const shopId = r.shopId || 'default';
+      if (!groups[shopId]) groups[shopId] = { label: '其他店铺', total: 0, adopted: 0 };
+      groups[shopId].total++;
+      if (state.adoptedIds.includes(r.replyId)) groups[shopId].adopted++;
+    });
+  } else if (type === 'scenario') {
+    groups = {
+      pre_sales: { label: '售前', total: 0, adopted: 0 },
+      after_sales: { label: '售后', total: 0, adopted: 0 },
+      unknown: { label: '其他', total: 0, adopted: 0 }
+    };
+    validRecords.forEach(r => {
+      const scenario = r.scenario || 'unknown';
+      if (!groups[scenario]) groups[scenario] = { label: scenario, total: 0, adopted: 0 };
+      groups[scenario].total++;
+      if (state.adoptedIds.includes(r.replyId)) groups[scenario].adopted++;
+    });
+  } else if (type === 'tone') {
+    Object.keys(TONE_LABELS).forEach(tone => {
+      groups[tone] = { label: TONE_LABELS[tone], total: 0, adopted: 0 };
+    });
+    validRecords.forEach(r => {
+      const tone = r.tone || 'professional';
+      if (!groups[tone]) groups[tone] = { label: tone, total: 0, adopted: 0 };
+      groups[tone].total++;
+      if (state.adoptedIds.includes(r.replyId)) groups[tone].adopted++;
+    });
+  }
+
+  const chartEntries = Object.entries(groups).filter(([_, g]) => g.total > 0);
+  
+  if (chartEntries.length === 0) {
+    chartEl.innerHTML = `
+      <div style="text-align:center;padding:30px;color:#9ca3af;font-size:13px;">
+        暂无统计数据，生成回复后将显示趋势
+      </div>
+    `;
+    return;
+  }
+
+  const maxTotal = Math.max(...chartEntries.map(([_, g]) => g.total), 1);
+  chartEl.innerHTML = chartEntries.map(([key, group]) => {
+    const rate = group.total > 0 ? Math.round((group.adopted / group.total) * 100) : 0;
+    const width = Math.round((group.total / maxTotal) * 100);
+    return `
+      <div class="trend-item">
+        <div class="trend-label">${group.label}</div>
+        <div class="trend-bar-wrap">
+          <div class="trend-bar" style="width: ${width}%">
+            <span class="trend-bar-value">${rate}%</span>
+          </div>
+        </div>
+        <div class="trend-stats">
+          <span class="trend-count">${group.adopted}/${group.total}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
 function renderHistoryList() {
   const list = document.getElementById('historyList');
   const start = (state.currentPage - 1) * state.pageSize;
@@ -141,8 +275,11 @@ function renderHistoryList() {
     return;
   }
 
-  const scenarioLabels = { pre_sales: '售前', after_sales: '售后' };
-  const emotionLabels = { happy: '😊 满意', angry: '😠 激动', neutral: '😐 平稳' };
+  const scenarioLabel = { pre_sales: '售前', after_sales: '售后' };
+  const emotionLabel = { happy: '😊 满意', angry: '😠 激动', neutral: '😐 平稳' };
+  const toneLabel = TONE_LABELS;
+  const shopMap = {};
+  state.shops.forEach(s => shopMap[s.id] = s.name);
 
   list.innerHTML = pageData.map(item => {
     const isAdopted = item.adopted || (item.replyId && state.adoptedIds.includes(item.replyId));
@@ -155,8 +292,10 @@ function renderHistoryList() {
       <div class="history-header">
         <div class="history-meta">
           <span class="history-time">${new Date(item.createdAt).toLocaleString()}</span>
-          ${item.scenario ? `<span class="tag tag-scenario ${item.scenario}">${scenarioLabels[item.scenario] || item.scenario}</span>` : ''}
-          ${item.emotion ? `<span class="tag tag-emotion ${item.emotion}">${emotionLabels[item.emotion] || item.emotion}</span>` : ''}
+          ${item.scenario ? `<span class="tag tag-scenario ${item.scenario}">${scenarioLabel[item.scenario] || item.scenario}</span>` : ''}
+          ${item.tone ? `<span class="tag" style="background:#f0f9ff;color:#0369a1;">${toneLabel[item.tone] || item.tone}</span>` : ''}
+          ${item.shopId && shopMap[item.shopId] ? `<span class="tag" style="background:#fdf4ff;color:#7e22ce;">${shopMap[item.shopId]}</span>` : ''}
+          ${item.emotion ? `<span class="tag tag-emotion ${item.emotion}">${emotionLabel[item.emotion] || item.emotion}</span>` : ''}
           ${statusTag}
         </div>
       </div>
@@ -223,12 +362,17 @@ window.copyContent = function(id) {
   if (item) {
     navigator.clipboard.writeText(item.content).then(() => {
       if (item.replyId) {
-        chrome.runtime.sendMessage({ action: 'markReplyAdopted', replyId: item.replyId }, () => {
-          if (!state.adoptedIds.includes(item.replyId)) {
-            state.adoptedIds.push(item.replyId);
+        chrome.runtime.sendMessage({ action: 'markReplyAdopted', replyId: item.replyId }, (res) => {
+          if (res && res.success && !res.alreadyAdopted && res.updated) {
+            if (!state.adoptedIds.includes(item.replyId)) {
+              state.adoptedIds.push(item.replyId);
+            }
+            item.adopted = true;
+            item.status = 'adopted';
+            renderStats();
+            renderTrendChart();
+            renderHistoryList();
           }
-          renderStats();
-          renderHistoryList();
         });
       }
       showToast('已复制');

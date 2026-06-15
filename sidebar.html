@@ -221,10 +221,24 @@
             <div class="stat-value" id="statAdopted">0</div>
             <div class="stat-label">已采纳</div>
           </div>
+          <div class="stat-card">
+            <div class="stat-value" id="statPending">0</div>
+            <div class="stat-label">待确认</div>
+          </div>
           <div class="stat-card highlight">
             <div class="stat-value" id="statRate">0%</div>
             <div class="stat-label">采纳率</div>
           </div>
+        </div>
+
+        <div class="adoption-trends">
+          <h3 class="section-title">采纳率趋势</h3>
+          <div class="trend-tabs" id="trendTabs">
+            <button class="trend-tab active" data-trend="shop">按店铺</button>
+            <button class="trend-tab" data-trend="scenario">按场景</button>
+            <button class="trend-tab" data-trend="tone">按语气</button>
+          </div>
+          <div class="trend-chart" id="trendChart"></div>
         </div>
 
         <div class="quality-actions">
@@ -240,8 +254,57 @@
               <polyline points="7 10 12 15 17 10"/>
               <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
-            导出质检记录
+            导出筛选结果
           </button>
+          <button class="ghost-btn" id="btnResetFilter">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18M7 12h10M10 18h4"/>
+            </svg>
+            重置筛选
+          </button>
+        </div>
+
+        <div class="quality-filters" id="qualityFilters">
+          <div class="filter-group">
+            <label>时间范围</label>
+            <select class="filter-select" id="filterTime">
+              <option value="all">全部时间</option>
+              <option value="today">今天</option>
+              <option value="week">近7天</option>
+              <option value="month">近30天</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>场景</label>
+            <select class="filter-select" id="filterScenario">
+              <option value="all">全部场景</option>
+              <option value="pre_sales">售前</option>
+              <option value="after_sales">售后</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>风险等级</label>
+            <select class="filter-select" id="filterRisk">
+              <option value="all">全部等级</option>
+              <option value="high">高风险</option>
+              <option value="medium">中风险</option>
+              <option value="low">低风险</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>分数区间</label>
+            <select class="filter-select" id="filterScore">
+              <option value="all">全部分数</option>
+              <option value="90-100">90-100分</option>
+              <option value="80-89">80-89分</option>
+              <option value="60-79">60-79分</option>
+              <option value="0-59">0-59分</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="filter-info" id="filterInfo" style="display:none;">
+          <span class="filter-count">已筛选 <b id="filteredCount">0</b> 条记录</span>
         </div>
 
         <div class="quality-list" id="qualityList">
@@ -262,8 +325,33 @@
         <div class="settings-section">
           <h3>API 配置</h3>
           <div class="form-group">
+            <label>供应商预设</label>
+            <div class="preset-buttons" id="apiPresets">
+              <button type="button" class="preset-btn" data-preset="openai">
+                <span class="preset-icon">🤖</span> OpenAI
+              </button>
+              <button type="button" class="preset-btn" data-preset="azure">
+                <span class="preset-icon">☁️</span> Azure
+              </button>
+              <button type="button" class="preset-btn" data-preset="qwen">
+                <span class="preset-icon">🐎</span> 通义千问
+              </button>
+              <button type="button" class="preset-btn" data-preset="doubao">
+                <span class="preset-icon">🫘</span> 豆包
+              </button>
+              <button type="button" class="preset-btn" data-preset="deepseek">
+                <span class="preset-icon">🔍</span> DeepSeek
+              </button>
+              <button type="button" class="preset-btn" data-preset="custom">
+                <span class="preset-icon">⚙️</span> 自定义
+              </button>
+            </div>
+          </div>
+          <div class="form-group">
             <label>API Key</label>
-            <input type="password" id="apiKey" placeholder="请输入 API Key">
+            <div class="input-with-action">
+              <input type="password" id="apiKey" placeholder="请输入 API Key">
+            </div>
           </div>
           <div class="form-group">
             <label>API 地址</label>
@@ -275,7 +363,28 @@
               <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
               <option value="gpt-4">GPT-4</option>
               <option value="gpt-4-turbo">GPT-4 Turbo</option>
+              <option value="qwen-plus">通义千问 Plus</option>
+              <option value="qwen-max">通义千问 Max</option>
+              <option value="doubao-pro-32k">豆包 Pro 32K</option>
+              <option value="deepseek-chat">DeepSeek Chat</option>
+              <option value="deepseek-reasoner">DeepSeek R1</option>
             </select>
+          </div>
+          <div class="form-group">
+            <button type="button" class="secondary-btn" id="btnTestApi" style="width:100%;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+              </svg>
+              测试连接
+            </button>
+            <div class="test-result" id="apiTestResult" style="display:none;"></div>
+          </div>
+          <div class="fallback-option">
+            <label class="checkbox-label">
+              <input type="checkbox" id="enableFallback" checked>
+              <span>API 不可用时自动使用本地模板</span>
+            </label>
           </div>
         </div>
 
@@ -398,6 +507,39 @@
       <div class="modal-footer">
         <button class="ghost-btn" id="cancelCompare">取消</button>
         <button class="primary-btn" id="saveCompare">保存记录</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="qualityDetailModal" style="display:none;">
+    <div class="modal detail-modal">
+      <div class="modal-header">
+        <h3 id="detailTitle">质检记录详情</h3>
+        <button class="close-btn" id="closeDetailModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="detail-meta" id="detailMeta"></div>
+        <div class="detail-section">
+          <h4>AI 生成原文</h4>
+          <div class="detail-content" id="detailOriginal"></div>
+        </div>
+        <div class="detail-section">
+          <h4>人工修改后</h4>
+          <div class="detail-content" id="detailModified"></div>
+        </div>
+        <div class="detail-section">
+          <h4>差异对比 <span class="detail-subtitle">(绿色=新增, 红色=删除)</span></h4>
+          <div class="detail-diff" id="detailDiff"></div>
+        </div>
+        <div class="detail-section" id="detailNotesSection" style="display:none;">
+          <h4>备注</h4>
+          <div class="detail-content" id="detailNotes"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="ghost-btn" id="copyOriginalBtn">复制原文</button>
+        <button class="ghost-btn" id="copyModifiedBtn">复制修改版</button>
+        <button class="primary-btn" id="closeDetailBtn">关闭</button>
       </div>
     </div>
   </div>

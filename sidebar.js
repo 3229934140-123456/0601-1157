@@ -9,7 +9,50 @@ const state = {
   analysis: null,
   generatedReply: null,
   editingScriptId: null,
-  currentReplyId: null
+  currentReplyId: null,
+  qualityRecords: [],
+  filteredQualityRecords: [],
+  qualityFilters: {
+    time: 'all',
+    scenario: 'all',
+    risk: 'all',
+    score: 'all'
+  },
+  currentTrendType: 'shop',
+  qualityDetail: null
+};
+
+const API_PRESETS = {
+  openai: {
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+    models: ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo'],
+    label: 'OpenAI'
+  },
+  azure: {
+    endpoint: 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/chat/completions?api-version=2024-02-15-preview',
+    models: ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo'],
+    label: 'Azure OpenAI'
+  },
+  qwen: {
+    endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    models: ['qwen-plus', 'qwen-max', 'qwen-turbo'],
+    label: '通义千问'
+  },
+  doubao: {
+    endpoint: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+    models: ['doubao-pro-32k', 'doubao-pro-256k', 'doubao-lite-32k'],
+    label: '豆包'
+  },
+  deepseek: {
+    endpoint: 'https://api.deepseek.com/chat/completions',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+    label: 'DeepSeek'
+  },
+  custom: {
+    endpoint: '',
+    models: [],
+    label: '自定义'
+  }
 };
 
 document.addEventListener('DOMContentLoaded', init);
@@ -17,6 +60,7 @@ document.addEventListener('DOMContentLoaded', init);
 async function init() {
   await loadSettings();
   await loadScripts();
+  await loadQualityRecords();
   applyUIVisibilitySettings();
   bindTabEvents();
   bindToneEvents();
@@ -27,8 +71,11 @@ async function init() {
   bindQualityEvents();
   bindModalEvents();
   bindSuggestionEvents();
+  bindApiPresetEvents();
+  bindFilterEvents();
   loadShopSelector();
   updateQualityStats();
+  loadTrendChart();
   loadScriptsList();
   listenConversationUpdates();
   handleHashNavigation();
@@ -61,6 +108,11 @@ function doNavigate(tab) {
     if (tab === 'settings') {
       populateSettingsForm();
     }
+    if (tab === 'quality') {
+      loadQualityRecords();
+      updateQualityStats();
+      loadTrendChart();
+    }
   }, 100);
 }
 
@@ -78,6 +130,9 @@ async function loadSettings() {
     chrome.runtime.sendMessage({ action: 'getSettings' }, (response) => {
       if (response.success) {
         state.settings = response.data;
+        if (!state.settings.enableFallback) {
+          state.settings.enableFallback = true;
+        }
       }
       resolve();
     });
@@ -89,6 +144,18 @@ async function loadScripts() {
     chrome.runtime.sendMessage({ action: 'getScripts' }, (response) => {
       if (response.success) {
         state.scripts = response.data;
+      }
+      resolve();
+    });
+  });
+}
+
+async function loadQualityRecords() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: 'getQualityRecords' }, (response) => {
+      if (response.success) {
+        state.qualityRecords = response.data;
+        applyQualityFilters();
       }
       resolve();
     });
@@ -118,6 +185,11 @@ function applyUIVisibilitySettings() {
   const qualitySettingsCard = document.getElementById('qualitySettings');
   if (qualitySettingsCard) {
     qualitySettingsCard.style.display = showQuality ? '' : 'none';
+  }
+
+  if (!showQuality && state.currentTab === 'quality') {
+    switchTab('generate');
+    showToast('质检面板已关闭，已返回智能生成页', 'success');
   }
 }
 
@@ -159,6 +231,12 @@ function bindTabEvents() {
 }
 
 function switchTab(tab) {
+  const showQuality = state.settings?.showQuality !== false;
+  if (tab === 'quality' && !showQuality) {
+    showToast('请先在设置中开启「显示质检面板」', 'error');
+    return;
+  }
+
   state.currentTab = tab;
   
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -172,6 +250,8 @@ function switchTab(tab) {
   
   if (tab === 'quality') {
     loadQualityRecords();
+    updateQualityStats();
+    loadTrendChart();
   }
 }
 
@@ -302,7 +382,8 @@ async function generateReply() {
       context,
       tone: state.currentTone,
       scenario: state.analysis?.scenario || 'pre_sales',
-      customerIssue
+      customerIssue,
+      enableFallback: state.settings?.enableFallback !== false
     }
   }, (response) => {
     btn.disabled = false;
@@ -321,7 +402,9 @@ async function generateReply() {
         } else if (response.meta.fallback) {
           const reason = response.meta.reason || '使用本地模板';
           const apiError = response.meta.apiError ? `：${response.meta.apiError}` : '';
-          metaInfo.innerHTML = `<span style="color:#f59e0b">⚠ 使用本地模板 (${reason}${apiError})</span>`;
+          const fallbackEnabled = state.settings?.enableFallback !== false;
+          const fallbackHint = !fallbackEnabled ? '<br><span style="font-size:11px;color:#ef4444;margin-top:4px;display:block;">提示：您可以在设置中开启「自动使用本地模板」选项</span>' : '';
+          metaInfo.innerHTML = `<span style="color:#f59e0b">⚠ ${reason}${apiError}</span>${fallbackHint}`;
         }
       } else {
         metaInfo.innerHTML = '';
@@ -335,15 +418,21 @@ async function generateReply() {
         renderExtractedIssues(response.data.extractedIssues);
       }
       
-      addHistory(replyText, false, (record) => {
+      addHistory(replyText, false, state.currentTone, (record) => {
         state.currentReplyId = record.replyId;
       });
       updateQualityStats();
+      loadTrendChart();
       showToast('回复生成成功（待采纳）', 'success');
     } else {
       const metaInfo = document.getElementById('apiMetaInfo') || createApiMetaInfo();
-      metaInfo.innerHTML = `<span style="color:#ef4444">✗ 生成失败：${response.error || '未知错误'}</span>`;
-      showToast('生成失败: ' + (response.error || '未知错误'), 'error');
+      const errMsg = response.error || '未知错误';
+      const fallbackEnabled = state.settings?.enableFallback !== false;
+      const fallbackHint = !fallbackEnabled 
+        ? `<br><span style="font-size:11px;color:#9ca3af;margin-top:4px;display:block;">提示：可在设置中开启「自动使用本地模板」作为备用</span>`
+        : '';
+      metaInfo.innerHTML = `<span style="color:#ef4444">✗ 生成失败：${errMsg}</span>${fallbackHint}`;
+      showToast('生成失败: ' + errMsg, 'error');
     }
   });
 }
@@ -352,7 +441,7 @@ function createApiMetaInfo() {
   const container = document.querySelector('.reply-section');
   const info = document.createElement('div');
   info.id = 'apiMetaInfo';
-  info.style.cssText = 'font-size:12px;margin-bottom:8px;padding:6px 10px;background:#f8fafc;border-radius:6px;';
+  info.style.cssText = 'font-size:12px;margin-bottom:8px;padding:6px 10px;background:#f8fafc;border-radius:6px;line-height:1.5;';
   const btn = document.getElementById('btnGenerate');
   btn.parentNode.insertBefore(info, btn.parentNode.firstChild);
   return info;
@@ -364,7 +453,7 @@ function renderAlternatives(alternatives) {
   
   section.style.display = 'block';
   list.innerHTML = alternatives.map(alt => `
-    <div class="alternative-item" data-content="${encodeURIComponent(alt.content)}">
+    <div class="alternative-item" data-content="${encodeURIComponent(alt.content)}" data-tone="${alt.tone}">
       <div class="alternative-tone">${alt.label}</div>
       <div class="alternative-content">${alt.content.slice(0, 80)}...</div>
     </div>
@@ -373,8 +462,15 @@ function renderAlternatives(alternatives) {
   list.querySelectorAll('.alternative-item').forEach(item => {
     item.addEventListener('click', () => {
       const content = decodeURIComponent(item.dataset.content);
+      const tone = item.dataset.tone;
       document.getElementById('replyContent').value = filterSensitiveWords(content);
       document.getElementById('charCount').textContent = content.length;
+      if (tone) {
+        state.currentTone = tone;
+        document.querySelectorAll('.tone-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.tone === tone);
+        });
+      }
     });
   });
 }
@@ -483,6 +579,8 @@ function bindCopySendEvents() {
     
     markCurrentReplyAdopted();
     window.parent.postMessage({ type: 'COPY_TO_INPUT', text }, '*');
+    updateQualityStats();
+    loadTrendChart();
   });
   
   document.getElementById('btnSend').addEventListener('click', () => {
@@ -494,6 +592,8 @@ function bindCopySendEvents() {
     
     window.parent.postMessage({ type: 'SEND_MESSAGE', text }, '*');
     markCurrentReplyAdopted();
+    updateQualityStats();
+    loadTrendChart();
     showToast('已发送到聊天框', 'success');
   });
 }
@@ -506,13 +606,13 @@ function markCurrentReplyAdopted() {
     }, (response) => {
       if (response && response.success) {
         if (response.alreadyAdopted) {
-          // 已采纳，不重复计数
         } else if (response.updated) {
           showToast('已采纳（采纳率已更新）', 'success');
         }
         if (response.stats) {
           document.getElementById('statTotal').textContent = response.stats.total;
           document.getElementById('statAdopted').textContent = response.stats.adopted;
+          document.getElementById('statPending').textContent = response.stats.pending || 0;
           document.getElementById('statRate').textContent = response.stats.rate + '%';
         }
       }
@@ -752,6 +852,122 @@ function bindSettingsEvents() {
       loadShopSelector();
     }
   });
+
+  document.getElementById('btnTestApi').addEventListener('click', testApiConnection);
+}
+
+function bindApiPresetEvents() {
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const preset = btn.dataset.preset;
+      const config = API_PRESETS[preset];
+      
+      document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      
+      document.getElementById('apiEndpoint').value = config.endpoint;
+      
+      const modelSelect = document.getElementById('modelSelect');
+      const currentModels = Array.from(modelSelect.options).map(o => o.value);
+      
+      config.models.forEach(model => {
+        if (!currentModels.includes(model)) {
+          const option = document.createElement('option');
+          option.value = model;
+          option.textContent = model;
+          modelSelect.appendChild(option);
+        }
+      });
+      
+      if (config.models.length > 0 && !config.models.includes(modelSelect.value)) {
+        modelSelect.value = config.models[0];
+      }
+      
+      showToast(`已切换到 ${config.label} 预设`, 'success');
+    });
+  });
+}
+
+function testApiConnection() {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  const apiEndpoint = document.getElementById('apiEndpoint').value.trim();
+  const model = document.getElementById('modelSelect').value;
+  const resultEl = document.getElementById('apiTestResult');
+
+  if (!apiKey) {
+    showApiResult(resultEl, false, '缺少 API Key', '请先在上方输入您的 API Key');
+    return;
+  }
+  if (!apiEndpoint) {
+    showApiResult(resultEl, false, '缺少 API 地址', '请先填写或选择 API 接口地址');
+    return;
+  }
+  if (!model) {
+    showApiResult(resultEl, false, '缺少模型名称', '请选择要使用的模型');
+    return;
+  }
+
+  const btn = document.getElementById('btnTestApi');
+  const originalText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<svg width="14" height="14" class="spinning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> 测试中...';
+
+  fetch(apiEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: model,
+      messages: [{ role: 'user', content: 'Hello, this is a connection test.' }],
+      max_tokens: 5
+    })
+  }).then(async (response) => {
+    if (!response.ok) {
+      let errDetail = `HTTP ${response.status}`;
+      try {
+        const errData = await response.json();
+        if (errData.error?.message) {
+          errDetail += '：' + errData.error.message;
+        }
+      } catch (_) {}
+      throw new Error(errDetail);
+    }
+    return response.json();
+  }).then((data) => {
+    const modelName = data.model || model;
+    showApiResult(resultEl, true, '连接成功！', `API 返回正常，模型：${modelName}`);
+  }).catch((error) => {
+    let reason = error.message || '网络错误';
+    let suggestion = '';
+    
+    if (reason.includes('401') || reason.includes('403') || reason.includes('Unauthorized') || reason.includes('authentication')) {
+      suggestion = '请检查 API Key 是否正确';
+    } else if (reason.includes('404') || reason.includes('not found')) {
+      suggestion = '请检查 API 地址是否正确';
+    } else if (reason.includes('model') || reason.includes('not exist') || reason.includes('available')) {
+      suggestion = '请检查所选模型是否可用';
+    } else if (reason.includes('quota') || reason.includes('insufficient') || reason.includes('balance')) {
+      suggestion = 'API 配额不足，请检查账户余额';
+    } else if (reason.includes('network') || reason.includes('fetch') || reason.includes('timeout')) {
+      suggestion = '请检查网络连接，或尝试使用代理';
+    }
+    
+    showApiResult(resultEl, false, '连接失败：' + reason, suggestion);
+  }).finally(() => {
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+  });
+}
+
+function showApiResult(el, success, title, detail) {
+  el.style.display = 'block';
+  el.className = 'test-result ' + (success ? 'success' : 'error');
+  el.innerHTML = `
+    <div class="test-title">${success ? '✓ ' : '✗ '}${title}</div>
+    ${detail ? `<div class="test-detail">${detail}</div>` : ''}
+  `;
 }
 
 function populateSettingsForm() {
@@ -765,6 +981,10 @@ function populateSettingsForm() {
   document.getElementById('sensitiveWords').value = (state.settings.sensitiveWords || []).join(',');
   document.getElementById('showEmotion').checked = state.settings.showEmotion !== false;
   document.getElementById('showQuality').checked = state.settings.showQuality !== false;
+  document.getElementById('enableFallback').checked = state.settings.enableFallback !== false;
+  document.getElementById('apiTestResult').style.display = 'none';
+  
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
   
   renderShopsList();
 }
@@ -813,6 +1033,7 @@ function saveSettings() {
   state.settings.sensitiveWords = document.getElementById('sensitiveWords').value.split(',').map(w => w.trim()).filter(w => w);
   state.settings.showEmotion = document.getElementById('showEmotion').checked;
   state.settings.showQuality = document.getElementById('showQuality').checked;
+  state.settings.enableFallback = document.getElementById('enableFallback').checked;
   
   chrome.runtime.sendMessage({
     action: 'saveSettings',
@@ -832,6 +1053,82 @@ function saveSettings() {
   });
 }
 
+function bindFilterEvents() {
+  ['filterTime', 'filterScenario', 'filterRisk', 'filterScore'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('change', () => {
+        state.qualityFilters.time = document.getElementById('filterTime').value;
+        state.qualityFilters.scenario = document.getElementById('filterScenario').value;
+        state.qualityFilters.risk = document.getElementById('filterRisk').value;
+        state.qualityFilters.score = document.getElementById('filterScore').value;
+        applyQualityFilters();
+        loadQualityRecordsList();
+      });
+    }
+  });
+
+  document.getElementById('btnResetFilter').addEventListener('click', () => {
+    state.qualityFilters = { time: 'all', scenario: 'all', risk: 'all', score: 'all' };
+    document.getElementById('filterTime').value = 'all';
+    document.getElementById('filterScenario').value = 'all';
+    document.getElementById('filterRisk').value = 'all';
+    document.getElementById('filterScore').value = 'all';
+    applyQualityFilters();
+    loadQualityRecordsList();
+    showToast('已重置筛选条件', 'success');
+  });
+
+  document.querySelectorAll('.trend-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.currentTrendType = btn.dataset.trend;
+      document.querySelectorAll('.trend-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.trend === state.currentTrendType);
+      });
+      loadTrendChart();
+    });
+  });
+}
+
+function applyQualityFilters() {
+  const filters = state.qualityFilters;
+  const now = Date.now();
+  const todayStart = new Date().setHours(0, 0, 0, 0);
+  const weekStart = now - 7 * 24 * 60 * 60 * 1000;
+  const monthStart = now - 30 * 24 * 60 * 60 * 1000;
+
+  state.filteredQualityRecords = state.qualityRecords.filter(record => {
+    if (filters.time !== 'all') {
+      if (filters.time === 'today' && record.createdAt < todayStart) return false;
+      if (filters.time === 'week' && record.createdAt < weekStart) return false;
+      if (filters.time === 'month' && record.createdAt < monthStart) return false;
+    }
+
+    if (filters.scenario !== 'all' && record.scenario !== filters.scenario) return false;
+
+    if (filters.risk !== 'all' && record.riskLevel !== filters.risk) return false;
+
+    if (filters.score !== 'all') {
+      const [min, max] = filters.score.split('-').map(Number);
+      const score = record.qualityScore || 0;
+      if (score < min || score > max) return false;
+    }
+
+    return true;
+  });
+
+  const filterInfo = document.getElementById('filterInfo');
+  const filteredCount = document.getElementById('filteredCount');
+  const anyFilter = filters.time !== 'all' || filters.scenario !== 'all' || filters.risk !== 'all' || filters.score !== 'all';
+  
+  if (anyFilter) {
+    filterInfo.style.display = 'flex';
+    filteredCount.textContent = state.filteredQualityRecords.length;
+  } else {
+    filterInfo.style.display = 'none';
+  }
+}
+
 function bindQualityEvents() {
   document.getElementById('btnCompare').addEventListener('click', () => {
     const content = document.getElementById('replyContent').value;
@@ -847,17 +1144,20 @@ function bindQualityEvents() {
   });
   
   document.getElementById('btnExportQuality').addEventListener('click', () => {
-    chrome.runtime.sendMessage({ action: 'getQualityRecords' }, (response) => {
-      if (response.success && response.data.length > 0) {
-        chrome.runtime.sendMessage({
-          action: 'exportQualityRecords',
-          data: response.data
-        }, () => {
-          showToast(`已导出 ${response.data.length} 条质检记录`, 'success');
-        });
-      } else {
-        showToast('暂无质检记录', 'error');
-      }
+    const recordsToExport = state.filteredQualityRecords && state.filteredQualityRecords.length > 0
+      ? state.filteredQualityRecords
+      : state.qualityRecords;
+    
+    if (recordsToExport.length === 0) {
+      showToast('暂无记录可导出', 'error');
+      return;
+    }
+    
+    chrome.runtime.sendMessage({
+      action: 'exportQualityRecords',
+      data: recordsToExport
+    }, () => {
+      showToast(`已导出 ${recordsToExport.length} 条质检记录`, 'success');
     });
   });
   
@@ -881,15 +1181,39 @@ function bindQualityEvents() {
       emotion: state.analysis?.emotion,
       riskLevel: state.analysis?.riskLevel,
       adopted: modified === original,
-      replyId: state.currentReplyId
+      replyId: state.currentReplyId,
+      shopId: state.settings?.currentShop,
+      tone: state.currentTone
     };
     
     chrome.runtime.sendMessage({ action: 'addQualityRecord', data: record }, async () => {
       closeModal('compareModal');
+      await loadQualityRecords();
       await updateQualityStats();
-      loadQualityRecords();
-      showToast('质检记录已保存', 'success');
+      loadTrendChart();
+      showToast('质检记录已保存，已更新到列表', 'success');
     });
+  });
+
+  document.getElementById('closeDetailModal').addEventListener('click', () => closeModal('qualityDetailModal'));
+  document.getElementById('closeDetailBtn').addEventListener('click', () => closeModal('qualityDetailModal'));
+  
+  document.getElementById('copyOriginalBtn').addEventListener('click', () => {
+    if (state.qualityDetail) {
+      navigator.clipboard.writeText(state.qualityDetail.originalReply || '');
+      showToast('已复制原文', 'success');
+    }
+  });
+  
+  document.getElementById('copyModifiedBtn').addEventListener('click', () => {
+    if (state.qualityDetail) {
+      navigator.clipboard.writeText(state.qualityDetail.modifiedReply || '');
+      showToast('已复制修改版', 'success');
+    }
+  });
+
+  document.getElementById('qualityDetailModal').addEventListener('click', (e) => {
+    if (e.target.id === 'qualityDetailModal') closeModal('qualityDetailModal');
   });
 }
 
@@ -899,6 +1223,7 @@ function updateQualityStats() {
       if (response.success) {
         document.getElementById('statTotal').textContent = response.data.total;
         document.getElementById('statAdopted').textContent = response.data.adopted;
+        document.getElementById('statPending').textContent = response.data.pending || 0;
         document.getElementById('statRate').textContent = response.data.rate + '%';
       }
       resolve();
@@ -906,64 +1231,215 @@ function updateQualityStats() {
   });
 }
 
-function loadQualityRecords() {
-  chrome.runtime.sendMessage({ action: 'getQualityRecords' }, (response) => {
-    const list = document.getElementById('qualityList');
+function loadTrendChart() {
+  Promise.all([
+    new Promise(resolve => chrome.runtime.sendMessage({ action: 'getHistory' }, res => resolve(res.data || []))),
+    new Promise(resolve => chrome.storage.local.get(['adoptedReplies'], res => resolve(res.adoptedReplies || [])))
+  ]).then(([history, adoptedIds]) => {
+    const validRecords = history.filter(h => h.replyId);
     
-    if (!response.success || response.data.length === 0) {
-      list.innerHTML = `
-        <div class="empty-state">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="16" y1="13" x2="8" y2="13"/>
-            <line x1="16" y1="17" x2="8" y2="17"/>
-            <polyline points="10 9 9 9 8 9"/>
-          </svg>
-          <p>暂无质检记录</p>
+    let groups = {};
+    const type = state.currentTrendType;
+    
+    if (type === 'shop') {
+      state.settings?.shops?.forEach(shop => {
+        groups[shop.id] = { label: shop.name, total: 0, adopted: 0 };
+      });
+      validRecords.forEach(r => {
+        const shopId = r.shopId || state.settings?.currentShop || 'default';
+        if (!groups[shopId]) groups[shopId] = { label: '其他店铺', total: 0, adopted: 0 };
+        groups[shopId].total++;
+        if (adoptedIds.includes(r.replyId)) groups[shopId].adopted++;
+      });
+    } else if (type === 'scenario') {
+      groups = {
+        pre_sales: { label: '售前', total: 0, adopted: 0 },
+        after_sales: { label: '售后', total: 0, adopted: 0 },
+        unknown: { label: '其他', total: 0, adopted: 0 }
+      };
+      validRecords.forEach(r => {
+        const scenario = r.scenario || 'unknown';
+        if (!groups[scenario]) groups[scenario] = { label: scenario, total: 0, adopted: 0 };
+        groups[scenario].total++;
+        if (adoptedIds.includes(r.replyId)) groups[scenario].adopted++;
+      });
+    } else if (type === 'tone') {
+      const toneLabels = { professional: '专业', friendly: '亲切', humorous: '幽默', concise: '简洁', enthusiastic: '热情' };
+      Object.keys(toneLabels).forEach(tone => {
+        groups[tone] = { label: toneLabels[tone], total: 0, adopted: 0 };
+      });
+      validRecords.forEach(r => {
+        const tone = r.tone || 'professional';
+        if (!groups[tone]) groups[tone] = { label: tone, total: 0, adopted: 0 };
+        groups[tone].total++;
+        if (adoptedIds.includes(r.replyId)) groups[tone].adopted++;
+      });
+    }
+
+    const chartEl = document.getElementById('trendChart');
+    const chartEntries = Object.entries(groups).filter(([_, g]) => g.total > 0);
+    
+    if (chartEntries.length === 0) {
+      chartEl.innerHTML = `
+        <div style="text-align:center;padding:20px;color:#9ca3af;font-size:12px;">
+          暂无统计数据，生成回复后将显示趋势
         </div>
       `;
       return;
     }
-    
-    const scoreClass = (score) => score >= 80 ? 'high' : score >= 60 ? 'medium' : 'low';
-    const scenarioLabel = { pre_sales: '售前', after_sales: '售后' };
-    
-    list.innerHTML = response.data.map(record => `
-      <div class="quality-item">
-        <div class="quality-header">
-          <span class="quality-time">${new Date(record.createdAt).toLocaleString()}</span>
-          ${record.scenario ? `<span class="tag tag-scenario ${record.scenario}">${scenarioLabel[record.scenario] || record.scenario}</span>` : ''}
-          <span class="quality-score ${scoreClass(record.qualityScore || 0)}">${record.qualityScore || 0}分</span>
-        </div>
-        <div class="quality-compare">
-          <div>
-            <div class="quality-col-label">AI 生成</div>
-            <div class="quality-col-content">${escapeHtml(record.originalReply || '').slice(0, 100)}${(record.originalReply || '').length > 100 ? '...' : ''}</div>
+
+    const maxTotal = Math.max(...chartEntries.map(([_, g]) => g.total), 1);
+    chartEl.innerHTML = chartEntries.map(([key, group]) => {
+      const rate = group.total > 0 ? Math.round((group.adopted / group.total) * 100) : 0;
+      const width = Math.round((group.total / maxTotal) * 100);
+      return `
+        <div class="trend-item">
+          <div class="trend-label">${group.label}</div>
+          <div class="trend-bar-wrap">
+            <div class="trend-bar" style="width: ${width}%">
+              <span class="trend-bar-value">${rate}%</span>
+            </div>
           </div>
-          <div>
-            <div class="quality-col-label">人工修改</div>
-            <div class="quality-col-content">${escapeHtml(record.modifiedReply || '').slice(0, 100)}${(record.modifiedReply || '').length > 100 ? '...' : ''}</div>
+          <div class="trend-stats">
+            <span class="trend-count">${group.adopted}/${group.total}</span>
           </div>
         </div>
-        ${record.notes ? `<div class="quality-notes">备注：${escapeHtml(record.notes)}</div>` : ''}
-      </div>
-    `).join('');
+      `;
+    }).join('');
   });
 }
 
-function addHistory(content, adopted, callback) {
+function loadQualityRecordsList() {
+  const list = document.getElementById('qualityList');
+  const records = state.filteredQualityRecords && state.filteredQualityRecords.length > 0
+    ? state.filteredQualityRecords
+    : state.qualityRecords;
+
+  if (records.length === 0) {
+    list.innerHTML = `
+      <div class="empty-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        <p>暂无质检记录</p>
+      </div>
+    `;
+    return;
+  }
+
+  const scoreClass = (score) => score >= 80 ? 'high' : score >= 60 ? 'medium' : 'low';
+  const scenarioLabel = { pre_sales: '售前', after_sales: '售后' };
+  const riskLabel = { high: '🔴 高风险', medium: '🟡 中风险', low: '🟢 低风险' };
+
+  list.innerHTML = records.map(record => `
+    <div class="quality-item" data-id="${record.id}" onclick="showQualityDetail('${record.id}')">
+      <div class="quality-header">
+        <span class="quality-time">${new Date(record.createdAt).toLocaleString()}</span>
+        ${record.scenario ? `<span class="tag tag-scenario ${record.scenario}">${scenarioLabel[record.scenario] || record.scenario}</span>` : ''}
+        ${record.riskLevel ? `<span class="tag tag-risk ${record.riskLevel}">${riskLabel[record.riskLevel]}</span>` : ''}
+        <span class="quality-score ${scoreClass(record.qualityScore || 0)}">${record.qualityScore || 0}分</span>
+      </div>
+      <div class="quality-compare">
+        <div>
+          <div class="quality-col-label">AI 生成</div>
+          <div class="quality-col-content">${escapeHtml(record.originalReply || '').slice(0, 100)}${(record.originalReply || '').length > 100 ? '...' : ''}</div>
+        </div>
+        <div>
+          <div class="quality-col-label">人工修改</div>
+          <div class="quality-col-content">${escapeHtml(record.modifiedReply || '').slice(0, 100)}${(record.modifiedReply || '').length > 100 ? '...' : ''}</div>
+        </div>
+      </div>
+      ${record.notes ? `<div class="quality-notes">备注：${escapeHtml(record.notes)}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+window.showQualityDetail = function(id) {
+  const record = state.qualityRecords.find(r => r.id === id);
+  if (!record) return;
+
+  state.qualityDetail = record;
+
+  document.getElementById('detailTitle').textContent = '质检记录详情 - ' + new Date(record.createdAt).toLocaleString();
+
+  const scenarioLabel = { pre_sales: '售前', after_sales: '售后' };
+  const riskLabel = { high: '🔴 高风险', medium: '🟡 中风险', low: '🟢 低风险' };
+  const emotionLabel = { happy: '😊 满意', angry: '😠 激动', neutral: '😐 平稳' };
+  const scoreClass = record.qualityScore >= 80 ? 'high' : record.qualityScore >= 60 ? 'medium' : 'low';
+
+  let metaHtml = '';
+  if (record.scenario) metaHtml += `<span class="meta-tag" style="background:#eff6ff;color:#1d4ed8;">${scenarioLabel[record.scenario]}</span>`;
+  if (record.riskLevel) metaHtml += `<span class="meta-tag" style="background:${record.riskLevel === 'high' ? '#fee2e2;color:#dc2626' : record.riskLevel === 'medium' ? '#fef3c7;color:#d97706' : '#d1fae5;color:#059669'};">${riskLabel[record.riskLevel]}</span>`;
+  if (record.emotion) metaHtml += `<span class="meta-tag" style="background:#faf5ff;color:#7c3aed;">${emotionLabel[record.emotion] || record.emotion}</span>`;
+  metaHtml += `<span class="meta-tag" style="background:${scoreClass === 'high' ? '#d1fae5;color:#059669' : scoreClass === 'medium' ? '#fef3c7;color:#d97706' : '#fee2e2;color:#dc2626'};">质检评分 ${record.qualityScore || 0} 分</span>`;
+  metaHtml += `<span class="meta-time">${new Date(record.createdAt).toLocaleString()}</span>`;
+  document.getElementById('detailMeta').innerHTML = metaHtml;
+
+  document.getElementById('detailOriginal').textContent = record.originalReply || '（无内容）';
+  document.getElementById('detailModified').textContent = record.modifiedReply || '（无内容）';
+
+  const diffHtml = computeDiff(record.originalReply || '', record.modifiedReply || '');
+  document.getElementById('detailDiff').innerHTML = diffHtml;
+
+  const notesSection = document.getElementById('detailNotesSection');
+  if (record.notes) {
+    notesSection.style.display = 'block';
+    document.getElementById('detailNotes').textContent = record.notes;
+  } else {
+    notesSection.style.display = 'none';
+  }
+
+  openModal('qualityDetailModal');
+};
+
+function computeDiff(oldText, newText) {
+  const oldWords = oldText.split(/(\s+|[，。！？、；：""''（）【】\[\]\(\)\n])/).filter(w => w);
+  const newWords = newText.split(/(\s+|[，。！？、；：""''（）【】\[\]\(\)\n])/).filter(w => w);
+
+  const oldSet = new Set(oldWords);
+  const newSet = new Set(newWords);
+
+  let html = '';
+  
+  newWords.forEach(word => {
+    if (oldSet.has(word)) {
+      html += `<span class="diff-same">${escapeHtml(word)}</span>`;
+    } else {
+      html += `<span class="diff-word added">${escapeHtml(word)}</span>`;
+    }
+  });
+
+  const removedWords = oldWords.filter(w => !newSet.has(w));
+  if (removedWords.length > 0) {
+    html += `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e5e7eb;"><div style="font-size:11px;color:#9ca3af;margin-bottom:6px;">已删除内容：</div>`;
+    removedWords.forEach(word => {
+      html += `<span class="diff-word removed">${escapeHtml(word)}</span>`;
+    });
+    html += `</div>`;
+  }
+
+  return html || '<span style="color:#9ca3af;">两段内容完全一致</span>';
+}
+
+function addHistory(content, adopted, tone, callback) {
   const record = {
     content,
     adopted,
     scenario: state.analysis?.scenario,
-    emotion: state.analysis?.emotion
+    emotion: state.analysis?.emotion,
+    shopId: state.settings?.currentShop,
+    tone: tone || state.currentTone
   };
   chrome.runtime.sendMessage({ action: 'addHistory', data: record }, (res) => {
     if (res && res.success && callback) {
       callback(res.data);
     }
     updateQualityStats();
+    loadTrendChart();
   });
 }
 

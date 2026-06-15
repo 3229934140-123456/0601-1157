@@ -248,6 +248,7 @@ function calculateAdoptionRate(sendResponse) {
 async function handleGenerateReply(data, sendResponse) {
   chrome.storage.local.get(['settings'], async (result) => {
     const settings = result.settings || DEFAULT_SETTINGS;
+    const enableFallback = data.enableFallback !== false;
     let usedApi = false;
     let apiError = null;
 
@@ -270,7 +271,30 @@ async function handleGenerateReply(data, sendResponse) {
         return;
       } catch (err) {
         apiError = err.message || 'API请求失败';
-        console.warn('API调用失败，回退到本地模板:', err);
+        console.warn('API调用失败:', err);
+        if (!enableFallback) {
+          sendResponse({
+            success: false,
+            error: apiError,
+            meta: { usedApi: false, apiError, fallbackDisabled: true }
+          });
+          return;
+        }
+      }
+    } else {
+      const missing = [];
+      if (!settings.apiKey) missing.push('API Key');
+      if (!settings.apiEndpoint) missing.push('API 地址');
+      if (!settings.model) missing.push('模型');
+      apiError = '缺少配置：' + missing.join('、');
+      
+      if (!enableFallback) {
+        sendResponse({
+          success: false,
+          error: apiError,
+          meta: { usedApi: false, apiError, fallbackDisabled: true }
+        });
+        return;
       }
     }
 
