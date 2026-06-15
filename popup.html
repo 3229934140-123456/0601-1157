@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 智能客服助手</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #fff;
+    }
+    
+    .popup-header {
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      text-align: center;
+    }
+    
+    .popup-header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .popup-header p {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+    
+    .popup-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      padding: 16px;
+      background: #f9fafb;
+    }
+    
+    .stat-item {
+      text-align: center;
+    }
+    
+    .stat-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: #667eea;
+    }
+    
+    .stat-label {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 2px;
+    }
+    
+    .popup-actions {
+      padding: 16px;
+    }
+    
+    .action-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #374151;
+      transition: all 0.2s;
+    }
+    
+    .action-btn:hover {
+      border-color: #667eea;
+      background: #f8faff;
+      color: #667eea;
+    }
+    
+    .action-btn svg {
+      width: 18px;
+      height: 18px;
+    }
+    
+    .action-btn.primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: none;
+      color: white;
+      justify-content: center;
+      font-weight: 500;
+    }
+    
+    .action-btn.primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+      color: white;
+    }
+    
+    .popup-footer {
+      padding: 12px 16px;
+      border-top: 1px solid #e5e7eb;
+      text-align: center;
+    }
+    
+    .popup-footer a {
+      font-size: 12px;
+      color: #6b7280;
+      text-decoration: none;
+    }
+    
+    .popup-footer a:hover {
+      color: #667eea;
+    }
+  </style>
+</head>
+<body>
+  <div class="popup-header">
+    <h1>AI 智能客服助手</h1>
+    <p>让客服工作更高效</p>
+  </div>
+  
+  <div class="popup-stats">
+    <div class="stat-item">
+      <div class="stat-value" id="popupTotal">0</div>
+      <div class="stat-label">总回复</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value" id="popupAdopted">0</div>
+      <div class="stat-label">已采纳</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value" id="popupRate">0%</div>
+      <div class="stat-label">采纳率</div>
+    </div>
+  </div>
+  
+  <div class="popup-actions">
+    <button class="action-btn primary" id="openSidebar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+        <line x1="9" y1="3" x2="9" y2="21"/>
+      </svg>
+      打开智能侧边栏
+    </button>
+    
+    <button class="action-btn" id="openHistory">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M1 4v6h6"/>
+        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+      </svg>
+      查看历史记录
+    </button>
+    
+    <button class="action-btn" id="openScripts">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+      </svg>
+      话术库管理
+    </button>
+  </div>
+  
+  <div class="popup-footer">
+    <a href="#" id="openSettings">⚙️ 设置</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

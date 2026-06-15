@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>生成图标 - AI 智能客服助手</title>
+  <style>
+    body {
+      font-family: -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f7fa;
+    }
+    h1 { color: #111827; }
+    .icons-grid {
+      display: flex;
+      gap: 30px;
+      margin: 30px 0;
+      flex-wrap: wrap;
+    }
+    .icon-box {
+      text-align: center;
+    }
+    canvas {
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .icon-box p {
+      margin-top: 10px;
+      color: #6b7280;
+      font-size: 14px;
+    }
+    button {
+      padding: 12px 24px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      margin: 10px 5px;
+    }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+    .hint {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      margin-top: 30px;
+      line-height: 1.8;
+      color: #374151;
+    }
+    code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎨 生成扩展图标</h1>
+  <p>点击下方按钮生成并下载所有图标文件到 <code>icons/</code> 目录。</p>
+  
+  <div class="icons-grid" id="iconsGrid"></div>
+  
+  <button onclick="generateAll()">📥 下载所有图标</button>
+  <button onclick="downloadIndividual()">📦 分别下载</button>
+  
+  <div class="hint">
+    <h3>📝 使用说明</h3>
+    <p>1. 点击"下载所有图标"或"分别下载"按钮</p>
+    <p>2. 将下载的文件放到扩展的 <code>icons/</code> 目录下，确保文件名分别为：</p>
+    <ul>
+      <li><code>icon16.png</code> (16x16)</li>
+      <li><code>icon48.png</code> (48x48)</li>
+      <li><code>icon128.png</code> (128x128)</li>
+    </ul>
+    <p>3. 如果暂时没有图标，扩展也能正常运行，只是会显示默认图标</p>
+  </div>
+
+  <script>
+    const sizes = [16, 48, 128];
+    const canvases = {};
+
+    function drawIcon(size) {
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      
+      const radius = size * 0.18;
+      
+      const gradient = ctx.createLinearGradient(0, 0, size, size);
+      gradient.addColorStop(0, '#667eea');
+      gradient.addColorStop(1, '#764ba2');
+      
+      ctx.beginPath();
+      roundRect(ctx, 0, 0, size, size, radius);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.arc(size * 0.5, size * 0.45, size * 0.28, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = size * 0.05;
+      ctx.stroke();
+      
+      ctx.beginPath();
+      ctx.moveTo(size * 0.5, size * 0.28);
+      ctx.lineTo(size * 0.5, size * 0.45);
+      ctx.lineTo(size * 0.62, size * 0.54);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = size * 0.05;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+      ctx.restore();
+      
+      ctx.beginPath();
+      ctx.arc(size * 0.7, size * 0.7, size * 0.14, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      
+      ctx.beginPath();
+      ctx.moveTo(size * 0.64, size * 0.7);
+      ctx.lineTo(size * 0.68, size * 0.74);
+      ctx.lineTo(size * 0.77, size * 0.65);
+      ctx.strokeStyle = '#667eea';
+      ctx.lineWidth = size * 0.035;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+      
+      return canvas;
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function init() {
+      const grid = document.getElementById('iconsGrid');
+      sizes.forEach(size => {
+        const canvas = drawIcon(size);
+        canvases[size] = canvas;
+        
+        const box = document.createElement('div');
+        box.className = 'icon-box';
+        if (size === 16) canvas.style.width = '64px';
+        if (size === 48) canvas.style.width = '96px';
+        if (size === 128) canvas.style.width = '128px';
+        canvas.style.height = canvas.style.width;
+        box.appendChild(canvas);
+        const p = document.createElement('p');
+        p.textContent = `${size}x${size}`;
+        box.appendChild(p);
+        grid.appendChild(box);
+      });
+    }
+
+    function downloadCanvas(canvas, filename) {
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    function generateAll() {
+      sizes.forEach((size, i) => {
+        setTimeout(() => {
+          downloadCanvas(canvases[size], `icon${size}.png`);
+        }, i * 300);
+      });
+    }
+
+    function downloadIndividual() {
+      sizes.forEach(size => {
+        downloadCanvas(canvases[size], `icon${size}.png`);
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>
