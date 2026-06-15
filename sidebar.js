@@ -8,7 +8,8 @@ const state = {
   conversationMessages: [],
   analysis: null,
   generatedReply: null,
-  editingScriptId: null
+  editingScriptId: null,
+  currentReplyId: null
 };
 
 document.addEventListener('DOMContentLoaded', init);
@@ -16,6 +17,7 @@ document.addEventListener('DOMContentLoaded', init);
 async function init() {
   await loadSettings();
   await loadScripts();
+  applyUIVisibilitySettings();
   bindTabEvents();
   bindToneEvents();
   bindGenerateEvents();
@@ -29,6 +31,37 @@ async function init() {
   updateQualityStats();
   loadScriptsList();
   listenConversationUpdates();
+  handleHashNavigation();
+}
+
+function handleHashNavigation() {
+  let targetTab = '';
+  const hash = window.location.hash.replace('#', '');
+  if (hash === 'settings' || hash === 'scripts' || hash === 'quality' || hash === 'generate') {
+    targetTab = hash;
+  }
+  window.location.hash = '';
+
+  if (!targetTab) {
+    chrome.storage.local.get(['_navTarget'], (result) => {
+      if (result._navTarget) {
+        targetTab = result._navTarget;
+        chrome.storage.local.remove(['_navTarget']);
+        doNavigate(targetTab);
+      }
+    });
+  } else {
+    doNavigate(targetTab);
+  }
+}
+
+function doNavigate(tab) {
+  setTimeout(() => {
+    switchTab(tab);
+    if (tab === 'settings') {
+      populateSettingsForm();
+    }
+  }, 100);
 }
 
 function listenConversationUpdates() {
@@ -60,6 +93,32 @@ async function loadScripts() {
       resolve();
     });
   });
+}
+
+function applyUIVisibilitySettings() {
+  const showEmotion = state.settings?.showEmotion !== false;
+  const showQuality = state.settings?.showQuality !== false;
+
+  const emotionTag = document.querySelector('.tag-emotion');
+  const analysisTags = document.getElementById('analysisTags');
+  if (!showEmotion && analysisTags) {
+    const allTags = analysisTags.querySelectorAll('.tag');
+    allTags.forEach(tag => {
+      if (tag.classList.contains('tag-emotion')) {
+        tag.style.display = 'none';
+      }
+    });
+  }
+
+  const qualityTabBtn = document.querySelector('.tab-btn[data-tab="quality"]');
+  if (qualityTabBtn) {
+    qualityTabBtn.style.display = showQuality ? '' : 'none';
+  }
+
+  const qualitySettingsCard = document.getElementById('qualitySettings');
+  if (qualitySettingsCard) {
+    qualitySettingsCard.style.display = showQuality ? '' : 'none';
+  }
 }
 
 function loadShopSelector() {
@@ -198,11 +257,17 @@ function renderAnalysis(analysis) {
   const emotionLabels = { happy: '😊 情绪满意', angry: '😠 情绪激动', neutral: '😐 情绪平稳' };
   const riskLabels = { high: '🔴 高风险', medium: '🟡 中风险', low: '🟢 低风险' };
   
-  tagsContainer.innerHTML = `
+  const showEmotion = state.settings?.showEmotion !== false;
+
+  let tagsHtml = `
     <span class="tag tag-scenario ${analysis.scenario}">${scenarioLabel}</span>
-    <span class="tag tag-emotion ${analysis.emotion}">${emotionLabels[analysis.emotion]}</span>
-    <span class="tag tag-risk ${analysis.riskLevel}">${riskLabels[analysis.riskLevel]}</span>
   `;
+  if (showEmotion) {
+    tagsHtml += `<span class="tag tag-emotion ${analysis.emotion}">${emotionLabels[analysis.emotion]}</span>`;
+  }
+  tagsHtml += `<span class="tag tag-risk ${analysis.riskLevel}">${riskLabels[analysis.riskLevel]}</span>`;
+
+  tagsContainer.innerHTML = tagsHtml;
   
   summaryEl.textContent = analysis.summary;
   
@@ -248,6 +313,19 @@ async function generateReply() {
       const replyText = filterSensitiveWords(response.data.primary);
       document.getElementById('replyContent').value = replyText;
       document.getElementById('charCount').textContent = replyText.length;
+
+      const metaInfo = document.getElementById('apiMetaInfo') || createApiMetaInfo();
+      if (response.meta) {
+        if (response.meta.usedApi) {
+          metaInfo.innerHTML = `<span style="color:#10b981">✓ 已调用 AI 接口 (${response.meta.model || '自定义模型'})</span>`;
+        } else if (response.meta.fallback) {
+          const reason = response.meta.reason || '使用本地模板';
+          const apiError = response.meta.apiError ? `：${response.meta.apiError}` : '';
+          metaInfo.innerHTML = `<span style="color:#f59e0b">⚠ 使用本地模板 (${reason}${apiError})</span>`;
+        }
+      } else {
+        metaInfo.innerHTML = '';
+      }
       
       if (response.data.alternatives && response.data.alternatives.length > 0) {
         renderAlternatives(response.data.alternatives);
@@ -257,12 +335,27 @@ async function generateReply() {
         renderExtractedIssues(response.data.extractedIssues);
       }
       
-      addHistory(replyText, true);
-      showToast('回复生成成功', 'success');
+      addHistory(replyText, false, (record) => {
+        state.currentReplyId = record.replyId;
+      });
+      updateQualityStats();
+      showToast('回复生成成功（待采纳）', 'success');
     } else {
+      const metaInfo = document.getElementById('apiMetaInfo') || createApiMetaInfo();
+      metaInfo.innerHTML = `<span style="color:#ef4444">✗ 生成失败：${response.error || '未知错误'}</span>`;
       showToast('生成失败: ' + (response.error || '未知错误'), 'error');
     }
   });
+}
+
+function createApiMetaInfo() {
+  const container = document.querySelector('.reply-section');
+  const info = document.createElement('div');
+  info.id = 'apiMetaInfo';
+  info.style.cssText = 'font-size:12px;margin-bottom:8px;padding:6px 10px;background:#f8fafc;border-radius:6px;';
+  const btn = document.getElementById('btnGenerate');
+  btn.parentNode.insertBefore(info, btn.parentNode.firstChild);
+  return info;
 }
 
 function renderAlternatives(alternatives) {
@@ -388,6 +481,7 @@ function bindCopySendEvents() {
       fallbackCopy(text);
     }
     
+    markCurrentReplyAdopted();
     window.parent.postMessage({ type: 'COPY_TO_INPUT', text }, '*');
   });
   
@@ -399,9 +493,31 @@ function bindCopySendEvents() {
     }
     
     window.parent.postMessage({ type: 'SEND_MESSAGE', text }, '*');
-    addHistory(text, true);
+    markCurrentReplyAdopted();
     showToast('已发送到聊天框', 'success');
   });
+}
+
+function markCurrentReplyAdopted() {
+  if (state.currentReplyId) {
+    chrome.runtime.sendMessage({
+      action: 'markReplyAdopted',
+      replyId: state.currentReplyId
+    }, (response) => {
+      if (response && response.success) {
+        if (response.alreadyAdopted) {
+          // 已采纳，不重复计数
+        } else if (response.updated) {
+          showToast('已采纳（采纳率已更新）', 'success');
+        }
+        if (response.stats) {
+          document.getElementById('statTotal').textContent = response.stats.total;
+          document.getElementById('statAdopted').textContent = response.stats.adopted;
+          document.getElementById('statRate').textContent = response.stats.rate + '%';
+        }
+      }
+    });
+  }
 }
 
 function fallbackCopy(text) {
@@ -686,6 +802,9 @@ window.deleteShop = function(id) {
 };
 
 function saveSettings() {
+  const oldShowEmotion = state.settings.showEmotion;
+  const oldShowQuality = state.settings.showQuality;
+
   state.settings.apiKey = document.getElementById('apiKey').value;
   state.settings.apiEndpoint = document.getElementById('apiEndpoint').value;
   state.settings.model = document.getElementById('modelSelect').value;
@@ -699,7 +818,17 @@ function saveSettings() {
     action: 'saveSettings',
     data: state.settings
   }, () => {
-    showToast('设置已保存', 'success');
+    const emotionChanged = oldShowEmotion !== state.settings.showEmotion;
+    const qualityChanged = oldShowQuality !== state.settings.showQuality;
+
+    if (emotionChanged && state.analysis) {
+      renderAnalysis(state.analysis);
+    }
+    if (qualityChanged) {
+      applyUIVisibilitySettings();
+    }
+
+    showToast('设置已保存，已立即生效', 'success');
   });
 }
 
@@ -724,7 +853,7 @@ function bindQualityEvents() {
           action: 'exportQualityRecords',
           data: response.data
         }, () => {
-          showToast('导出成功', 'success');
+          showToast(`已导出 ${response.data.length} 条质检记录`, 'success');
         });
       } else {
         showToast('暂无质检记录', 'error');
@@ -751,7 +880,8 @@ function bindQualityEvents() {
       scenario: state.analysis?.scenario,
       emotion: state.analysis?.emotion,
       riskLevel: state.analysis?.riskLevel,
-      adopted: modified === original
+      adopted: modified === original,
+      replyId: state.currentReplyId
     };
     
     chrome.runtime.sendMessage({ action: 'addQualityRecord', data: record }, async () => {
@@ -764,12 +894,15 @@ function bindQualityEvents() {
 }
 
 function updateQualityStats() {
-  chrome.runtime.sendMessage({ action: 'getAdoptionRate' }, (response) => {
-    if (response.success) {
-      document.getElementById('statTotal').textContent = response.data.total;
-      document.getElementById('statAdopted').textContent = response.data.adopted;
-      document.getElementById('statRate').textContent = response.data.rate + '%';
-    }
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: 'getAdoptionRate' }, (response) => {
+      if (response.success) {
+        document.getElementById('statTotal').textContent = response.data.total;
+        document.getElementById('statAdopted').textContent = response.data.adopted;
+        document.getElementById('statRate').textContent = response.data.rate + '%';
+      }
+      resolve();
+    });
   });
 }
 
@@ -794,21 +927,23 @@ function loadQualityRecords() {
     }
     
     const scoreClass = (score) => score >= 80 ? 'high' : score >= 60 ? 'medium' : 'low';
+    const scenarioLabel = { pre_sales: '售前', after_sales: '售后' };
     
     list.innerHTML = response.data.map(record => `
       <div class="quality-item">
         <div class="quality-header">
           <span class="quality-time">${new Date(record.createdAt).toLocaleString()}</span>
+          ${record.scenario ? `<span class="tag tag-scenario ${record.scenario}">${scenarioLabel[record.scenario] || record.scenario}</span>` : ''}
           <span class="quality-score ${scoreClass(record.qualityScore || 0)}">${record.qualityScore || 0}分</span>
         </div>
         <div class="quality-compare">
           <div>
             <div class="quality-col-label">AI 生成</div>
-            <div class="quality-col-content">${escapeHtml(record.originalReply || '').slice(0, 100)}...</div>
+            <div class="quality-col-content">${escapeHtml(record.originalReply || '').slice(0, 100)}${(record.originalReply || '').length > 100 ? '...' : ''}</div>
           </div>
           <div>
             <div class="quality-col-label">人工修改</div>
-            <div class="quality-col-content">${escapeHtml(record.modifiedReply || '').slice(0, 100)}...</div>
+            <div class="quality-col-content">${escapeHtml(record.modifiedReply || '').slice(0, 100)}${(record.modifiedReply || '').length > 100 ? '...' : ''}</div>
           </div>
         </div>
         ${record.notes ? `<div class="quality-notes">备注：${escapeHtml(record.notes)}</div>` : ''}
@@ -817,14 +952,17 @@ function loadQualityRecords() {
   });
 }
 
-function addHistory(content, adopted) {
+function addHistory(content, adopted, callback) {
   const record = {
     content,
     adopted,
     scenario: state.analysis?.scenario,
     emotion: state.analysis?.emotion
   };
-  chrome.runtime.sendMessage({ action: 'addHistory', data: record }, () => {
+  chrome.runtime.sendMessage({ action: 'addHistory', data: record }, (res) => {
+    if (res && res.success && callback) {
+      callback(res.data);
+    }
     updateQualityStats();
   });
 }
@@ -892,7 +1030,7 @@ function showToast(message, type = '') {
   toast.className = 'toast show ' + type;
   setTimeout(() => {
     toast.className = 'toast';
-  }, 2000);
+  }, 2500);
 }
 
 function escapeHtml(text) {

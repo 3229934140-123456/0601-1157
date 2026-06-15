@@ -13,31 +13,37 @@ function loadStats() {
   });
 }
 
-function bindEvents() {
-  document.getElementById('openSidebar').addEventListener('click', () => {
+function openSidebarWithTab(tabName) {
+  chrome.storage.local.set({ _navTarget: tabName }, () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
-        chrome.sidePanel.open({ tabId: tabs[0].id }).catch(() => {
-          chrome.tabs.sendMessage(tabs[0].id, { action: 'toggleSidebar' });
-        });
+      const openPromise = tabs[0]
+        ? chrome.sidePanel.open({ tabId: tabs[0].id }).catch(() => Promise.resolve())
+        : Promise.resolve();
+
+      openPromise.then(() => {
+        chrome.tabs.create({ url: chrome.runtime.getURL('sidebar.html#' + tabName) });
         window.close();
-      }
+      });
     });
   });
-  
+}
+
+function bindEvents() {
+  document.getElementById('openSidebar').addEventListener('click', () => {
+    openSidebarWithTab('generate');
+  });
+
   document.getElementById('openHistory').addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
     window.close();
   });
-  
+
   document.getElementById('openScripts').addEventListener('click', () => {
-    chrome.tabs.create({ url: chrome.runtime.getURL('sidebar.html') });
-    window.close();
+    openSidebarWithTab('scripts');
   });
-  
+
   document.getElementById('openSettings').addEventListener('click', (e) => {
     e.preventDefault();
-    chrome.runtime.openOptionsPage();
-    window.close();
+    openSidebarWithTab('settings');
   });
 }

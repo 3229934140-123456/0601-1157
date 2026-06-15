@@ -23,7 +23,7 @@ const DEFAULT_SETTINGS = {
 };
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(['settings', 'scripts', 'history', 'qualityRecords'], (data) => {
+  chrome.storage.local.get(['settings', 'scripts', 'history', 'qualityRecords', 'adoptedReplies'], (data) => {
     if (!data.settings) {
       chrome.storage.local.set({ settings: DEFAULT_SETTINGS });
     }
@@ -35,6 +35,9 @@ chrome.runtime.onInstalled.addListener(() => {
     }
     if (!data.qualityRecords) {
       chrome.storage.local.set({ qualityRecords: [] });
+    }
+    if (!data.adoptedReplies) {
+      chrome.storage.local.set({ adoptedReplies: [] });
     }
   });
 
@@ -93,16 +96,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true;
 
     case 'addHistory':
-      chrome.storage.local.get(['history'], (data) => {
-        const history = data.history || [];
-        request.data.id = Date.now().toString();
-        request.data.createdAt = Date.now();
-        history.unshift(request.data);
-        if (history.length > 500) history.length = 500;
-        chrome.storage.local.set({ history }, () => {
-          sendResponse({ success: true, data: request.data });
-        });
-      });
+      handleAddHistory(request.data, sendResponse);
+      return true;
+
+    case 'markReplyAdopted':
+      handleMarkReplyAdopted(request.replyId, sendResponse);
       return true;
 
     case 'getHistory':
@@ -112,7 +110,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true;
 
     case 'clearHistory':
-      chrome.storage.local.set({ history: [] }, () => {
+      chrome.storage.local.set({ history: [], adoptedReplies: [] }, () => {
         sendResponse({ success: true });
       });
       return true;
@@ -137,28 +135,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true;
 
     case 'exportQualityRecords':
-      const records = request.data || [];
-      const csv = convertToCSV(records);
-      const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      chrome.downloads.download({
-        url: url,
-        filename: `质检记录_${new Date().toISOString().slice(0, 10)}.csv`,
-        saveAs: true
-      }, () => {
-        URL.revokeObjectURL(url);
-        sendResponse({ success: true });
+      chrome.storage.local.get(['qualityRecords'], (data) => {
+        const records = (request.data && request.data.length > 0) ? request.data : (data.qualityRecords || []);
+        const csv = convertToCSV(records);
+        const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        chrome.downloads.download({
+          url: url,
+          filename: `质检记录_${new Date().toISOString().slice(0, 10)}.csv`,
+          saveAs: true
+        }, () => {
+          URL.revokeObjectURL(url);
+          sendResponse({ success: true });
+        });
       });
       return true;
 
     case 'getAdoptionRate':
-      chrome.storage.local.get(['history'], (data) => {
-        const history = data.history || [];
-        const adopted = history.filter(h => h.adopted).length;
-        const total = history.length;
-        const rate = total > 0 ? Math.round((adopted / total) * 100) : 0;
-        sendResponse({ success: true, data: { adopted, total, rate } });
-      });
+      calculateAdoptionRate(sendResponse);
       return true;
 
     case 'generateReply':
@@ -174,16 +168,213 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-function handleGenerateReply(data, sendResponse) {
+function handleAddHistory(data, sendResponse) {
+  chrome.storage.local.get(['history'], (result) => {
+    const history = result.history || [];
+    const record = {
+      ...data,
+      id: Date.now().toString(),
+      createdAt: Date.now(),
+      status: data.adopted ? 'adopted' : 'pending'
+    };
+
+    if (!record.replyId) {
+      record.replyId = 'reply_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    }
+
+    history.unshift(record);
+    if (history.length > 500) history.length = 500;
+
+    chrome.storage.local.set({ history }, () => {
+      sendResponse({ success: true, data: record });
+    });
+  });
+}
+
+function handleMarkReplyAdopted(replyId, sendResponse) {
+  chrome.storage.local.get(['history', 'adoptedReplies'], (result) => {
+    const history = result.history || [];
+    const adoptedReplies = result.adoptedReplies || [];
+
+    let alreadyAdopted = adoptedReplies.includes(replyId);
+
+    if (!alreadyAdopted && replyId) {
+      adoptedReplies.push(replyId);
+    }
+
+    let updated = false;
+    for (let i = 0; i < history.length; i++) {
+      if (history[i].replyId === replyId && history[i].status !== 'adopted') {
+        history[i].status = 'adopted';
+        history[i].adopted = true;
+        history[i].adoptedAt = Date.now();
+        updated = true;
+        break;
+      }
+    }
+
+    chrome.storage.local.set({ history, adoptedReplies }, () => {
+      calculateAdoptionRate((rateRes) => {
+        sendResponse({
+          success: true,
+          alreadyAdopted,
+          updated,
+          stats: rateRes.data
+        });
+      });
+    });
+  });
+}
+
+function calculateAdoptionRate(sendResponse) {
+  chrome.storage.local.get(['history', 'adoptedReplies'], (result) => {
+    const history = result.history || [];
+    const adoptedReplies = result.adoptedReplies || [];
+
+    const validReplies = history.filter(h => h.replyId);
+    const uniqueIds = [...new Set(validReplies.map(h => h.replyId))];
+    const total = uniqueIds.length;
+    const adopted = adoptedReplies.filter(id => uniqueIds.includes(id)).length;
+    const rate = total > 0 ? Math.round((adopted / total) * 100) : 0;
+    const pending = total - adopted;
+
+    sendResponse({
+      success: true,
+      data: { adopted, total, rate, pending }
+    });
+  });
+}
+
+async function handleGenerateReply(data, sendResponse) {
   chrome.storage.local.get(['settings'], async (result) => {
     const settings = result.settings || DEFAULT_SETTINGS;
+    let usedApi = false;
+    let apiError = null;
+
+    if (settings.apiKey && settings.apiEndpoint && settings.model) {
+      try {
+        const apiReply = await callRealApi(data, settings);
+        usedApi = true;
+        const alternatives = generateAlternatives(apiReply.primary, data.tone);
+        sendResponse({
+          success: true,
+          data: {
+            primary: apiReply.primary,
+            alternatives,
+            rewritten: rewriteHarshTone(apiReply.primary),
+            extractedIssues: extractIssues(data.context),
+            suggestions: generateSuggestions(data.scenario, settings)
+          },
+          meta: { usedApi: true, model: settings.model }
+        });
+        return;
+      } catch (err) {
+        apiError = err.message || 'API请求失败';
+        console.warn('API调用失败，回退到本地模板:', err);
+      }
+    }
+
     try {
       const reply = await mockGenerateReply(data, settings);
-      sendResponse({ success: true, data: reply });
+      sendResponse({
+        success: true,
+        data: reply,
+        meta: {
+          usedApi: false,
+          fallback: true,
+          apiError,
+          reason: !settings.apiKey ? '未配置API Key' : apiError || '使用本地模板'
+        }
+      });
     } catch (error) {
-      sendResponse({ success: false, error: error.message });
+      sendResponse({
+        success: false,
+        error: `生成失败: ${error.message}`,
+        meta: { usedApi: false, apiError }
+      });
     }
   });
+}
+
+async function callRealApi(data, settings) {
+  const toneLabels = {
+    professional: '专业正式',
+    friendly: '亲切友好',
+    humorous: '幽默轻松',
+    concise: '简洁明了',
+    enthusiastic: '热情洋溢'
+  };
+  const scenarioLabels = {
+    pre_sales: '售前咨询场景',
+    after_sales: '售后服务场景'
+  };
+
+  const shop = settings.shops.find(s => s.id === settings.currentShop) || settings.shops[0];
+
+  const systemPrompt = `你是一位专业的电商客服助理。请根据以下要求生成回复：
+
+【基本规则】
+- 当前场景：${scenarioLabels[data.scenario] || '售前咨询'}
+- 语气风格：${toneLabels[data.tone] || '专业正式'}
+- 店铺退换货政策：${shop.rules.returnPolicy}
+- 店铺发货政策：${shop.rules.shippingPolicy}
+- 店铺质保政策：${shop.rules.warrantyPolicy}
+
+【敏感词要求】
+回复中不要使用以下绝对化承诺词汇：保证、一定、绝对、100%、永久、终身、最便宜、最低价、第一、唯一
+
+【回复要求】
+1. 针对客户的具体问题直接回复，不要套话空话
+2. 如果是售后场景，先表达歉意和同理心
+3. 适当使用表情符号增加亲切感，但不要过多
+4. 如有需要，可以主动询问订单号或其他信息
+5. 回复结构清晰，重点信息使用换行或编号突出
+`;
+
+  const userPrompt = `【客户对话历史】
+${data.context || '暂无对话记录'}
+
+【已识别的客户问题】
+${data.customerIssue || '待识别'}
+
+请生成一条合适的客服回复：`;
+
+  const requestBody = {
+    model: settings.model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ],
+    temperature: data.tone === 'humorous' ? 0.8 : 0.7,
+    max_tokens: 800
+  };
+
+  const response = await fetch(settings.apiEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${settings.apiKey}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    let errText = `HTTP ${response.status}`;
+    try {
+      const errData = await response.json();
+      if (errData.error?.message) errText += ': ' + errData.error.message;
+    } catch (_) { /* ignore */ }
+    throw new Error(errText);
+  }
+
+  const json = await response.json();
+  const content = json?.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error('API返回内容为空');
+  }
+
+  return { primary: content.trim() };
 }
 
 function handleAnalyzeConversation(data, sendResponse) {
@@ -200,10 +391,10 @@ function mockGenerateReply(data, settings) {
     setTimeout(() => {
       const { context, tone, scenario, customerIssue } = data;
       const shop = settings.shops.find(s => s.id === settings.currentShop) || settings.shops[0];
-      
+
       let reply = '';
       const greeting = getGreeting(tone);
-      
+
       if (scenario === 'after_sales') {
         if (customerIssue?.includes('退换') || customerIssue?.includes('退货')) {
           reply = `${greeting}非常抱歉给您带来了不便！关于退换货问题，我们的政策如下：${shop.rules.returnPolicy}\n\n请问您方便告知一下订单号和具体原因吗？我这边马上为您处理。`;
@@ -242,7 +433,7 @@ function mockGenerateReply(data, settings) {
 
 function mockAnalyzeConversation(messages) {
   const text = messages.map(m => m.content).join(' ');
-  
+
   let scenario = 'pre_sales';
   let emotion = 'neutral';
   let riskLevel = 'low';
@@ -324,10 +515,16 @@ function generateAlternatives(primary, tone) {
 
   tones.forEach(t => {
     if (t.key !== tone) {
+      const greeting = getGreeting(t.key);
+      let altContent = primary;
+      const firstPeriod = primary.search(/[，。！\n]/);
+      if (firstPeriod > 0 && firstPeriod < 15) {
+        altContent = greeting + primary.slice(firstPeriod + 1);
+      }
       alternatives.push({
         tone: t.key,
         label: t.label,
-        content: primary + `\n\n【${t.label}风格变体】`
+        content: altContent
       });
     }
   });
@@ -343,7 +540,9 @@ function rewriteHarshTone(text) {
     { from: /不可能/g, to: '确实比较困难' },
     { from: /我不管/g, to: '我理解您的心情' },
     { from: /随便你/g, to: '您可以根据需要选择' },
-    { from: /不关我事/g, to: '让我帮您转接相关同事' }
+    { from: /不关我事/g, to: '让我帮您转接相关同事' },
+    { from: /你不懂/g, to: '可能您不太了解' },
+    { from: /别问我/g, to: '我帮您查询一下' }
   ];
 
   let result = text;
@@ -387,7 +586,7 @@ function generateSummary(messages, scenario, emotion) {
 
 function convertToCSV(records) {
   if (records.length === 0) return '';
-  
+
   const headers = ['ID', '时间', '场景', '情绪', '风险等级', '原始回复', '修改后回复', '是否采纳', '质检得分', '备注'];
   const rows = records.map(r => [
     r.id,
@@ -401,7 +600,7 @@ function convertToCSV(records) {
     r.qualityScore || '',
     `"${(r.notes || '').replace(/"/g, '""')}"`
   ]);
-  
+
   return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
 }
 
